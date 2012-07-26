@@ -235,8 +235,19 @@
   (-entry-key [coll entry])
   (-comparator [coll]))
 
-(defprotocol IPrintable
+(defprotocol ^:deprecated IPrintable
+  "Do not use this.  It is kept for backwards compatibility with existing
+   user code that depends on it, but it has been superceded by IPrintWith.
+   User code that depends on this should be changed to use -pr-with instead."
   (-pr-seq [o opts]))
+
+(defprotocol IPrintWith
+  "The old IPrintable protocol's implementation consisted of building a giant
+   list of strings to concatenate.  This involved lots of concat calls,
+   intermediate vectors, and lazy-seqs, and was very slow in some older JS
+   engines.  IPrintWith makes the print implementation configurable, so it can
+   be implemented efficiently in terms of e.g. a StringBuffer append."
+  (-pr-with [o printer opts]))
 
 (defprotocol IPending
   (-realized? [d]))
@@ -331,6 +342,9 @@
 
   IPrintable
   (-pr-seq [o] (list "nil"))
+
+  IPrintWith
+  (-pr-with [o printer _] (printer "nil"))
 
   IIndexed
   (-nth
@@ -476,7 +490,7 @@ reduces them without incurring seq initialization"
   Object
   (toString [this]
     (pr-str this))
-  
+
   ISeqable
   (-seq [this] this)
 
@@ -585,7 +599,7 @@ reduces them without incurring seq initialization"
   IWithMeta
   (-with-meta [coll new-meta]
     (RSeq. ci i new-meta))
-  
+
   ISeqable
   (-seq [coll] coll)
 
@@ -857,7 +871,7 @@ reduces them without incurring seq initialization"
 (defn hash
   ([o] (hash o true))
   ([o ^boolean check-cache]
-     (if (and ^boolean (goog/isString o) check-cache) 
+     (if (and ^boolean (goog/isString o) check-cache)
        (check-string-hash-cache o)
        (-hash o))))
 
@@ -1532,11 +1546,11 @@ reduces them without incurring seq initialization"
 ;;;;;;;;;;;;;;;; cons ;;;;;;;;;;;;;;;;
 (deftype List [meta first rest count ^:mutable __hash]
   IList
-  
+
   Object
   (toString [this]
     (pr-str this))
-  
+
   IWithMeta
   (-with-meta [coll meta] (List. meta first rest count __hash))
 
@@ -1582,7 +1596,7 @@ reduces them without incurring seq initialization"
 
 (deftype EmptyList [meta]
   IList
-  
+
   Object
   (toString [this]
     (pr-str this))
@@ -1649,7 +1663,7 @@ reduces them without incurring seq initialization"
 
 (deftype Cons [meta first rest ^:mutable __hash]
   IList
-  
+
   Object
   (toString [this]
     (pr-str this))
@@ -1824,7 +1838,7 @@ reduces them without incurring seq initialization"
 (deftype ArrayChunk [arr off end]
   ICounted
   (-count [_] (- end off))
-  
+
   IIndexed
   (-nth [coll i]
     (aget arr (+ off i)))
@@ -2887,7 +2901,7 @@ reduces them without incurring seq initialization"
              ret))))
 
 (declare tv-editable-root tv-editable-tail TransientVector deref
-         pr-sequential pr-seq)
+         pr-sequential pr-sequential-with pr-with)
 
 (declare chunked-seq)
 
@@ -3401,7 +3415,7 @@ reduces them without incurring seq initialization"
   Object
   (toString [this]
     (pr-str this))
-  
+
   IWithMeta
   (-with-meta [coll meta] (PersistentQueueSeq. meta front rear __hash))
 
@@ -3437,7 +3451,7 @@ reduces them without incurring seq initialization"
   Object
   (toString [this]
     (pr-str this))
-  
+
   IWithMeta
   (-with-meta [coll meta] (PersistentQueue. meta count front rear __hash))
 
@@ -3554,7 +3568,7 @@ reduces them without incurring seq initialization"
   Object
   (toString [this]
     (pr-str this))
-  
+
   IWithMeta
   (-with-meta [coll meta] (ObjMap. meta keys strobj update-count __hash))
 
@@ -3658,7 +3672,7 @@ reduces them without incurring seq initialization"
   Object
   (toString [this]
     (pr-str this))
-  
+
   IWithMeta
   (-with-meta [coll meta] (HashMap. meta count hashobj __hash))
 
@@ -5559,7 +5573,7 @@ reduces them without incurring seq initialization"
   Object
   (toString [this]
     (pr-str this))
-  
+
   IWithMeta
   (-with-meta [coll meta] (PersistentHashSet. meta hash-map __hash))
 
@@ -5895,7 +5909,7 @@ reduces them without incurring seq initialization"
   Object
   (toString [this]
     (pr-str this))
-  
+
   IWithMeta
   (-with-meta [rng meta] (Range. meta start end step __hash))
 
@@ -6123,11 +6137,23 @@ reduces them without incurring seq initialization"
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Printing ;;;;;;;;;;;;;;;;
 
-(defn pr-sequential [print-one begin sep end opts coll]
+(defn ^:deprecated pr-sequential
+  "Do not use this.  It is kept for backwards compatibility with the
+   old IPrintable protocol."
+  [print-one begin sep end opts coll]
   (concat [begin]
           (flatten1
             (interpose [sep] (map #(print-one % opts) coll)))
           [end]))
+
+(defn pr-sequential-with [printer print-one begin sep end opts coll]
+  (printer begin)
+  (when (seq coll)
+    (print-one (first coll) printer opts))
+  (doseq [o (next coll)]
+    (printer sep)
+    (print-one o printer opts))
+  (printer end))
 
 (defn string-print [x]
   (*print-fn* x)
@@ -6136,7 +6162,10 @@ reduces them without incurring seq initialization"
 (defn flush [] ;stub
   nil)
 
-(defn- pr-seq [obj opts]
+(defn- ^:deprecated pr-seq
+  "Do not use this.  It is kept for backwards compatibility with the
+   old IPrintable protocol."
+  [obj opts]
   (cond
     (nil? obj) (list "nil")
     (undefined? obj) (list "#<undefined>")
@@ -6157,14 +6186,51 @@ reduces them without incurring seq initialization"
 
              :else (list "#<" (str obj) ">")))))
 
-(defn- pr-sb [objs opts]
-  (let [sb (gstring/StringBuffer.)]
-    (doseq [string (pr-seq (first objs) opts)]
-      (.append sb string))
-    (doseq [obj (next objs)]
-      (.append sb " ")
-      (doseq [string (pr-seq obj opts)]
-        (.append sb string)))
+(defn- pr-with
+  "Prefer this to pr-seq, because it makes the printing function
+   configurable, allowing efficient implementations such as appending
+   to a StringBuffer."
+  [obj printer opts]
+  (cond
+    (nil? obj) (printer "nil")
+    (undefined? obj) (printer "#<undefined>")
+    :else (do
+            (when (and (get opts :meta)
+                       (satisfies? IMeta obj)
+                       (meta obj))
+              (printer "^")
+              (pr-with (meta obj) printer opts)
+              (printer " "))
+            (cond
+              ;; handle CLJS ctors
+              (and (not (nil? obj))
+                   ^boolean (.-cljs$lang$type obj))
+                (.cljs$lang$ctorPrWith obj printer opts)
+
+              ; Use the new, more efficient, IPrintWith interface when possible.
+              (satisfies? IPrintWith obj) (-pr-with obj printer opts)
+
+              ; Fall back on the deprecated IPrintable if necessary.  Note that this
+              ; will only happen when ClojureScript users have implemented -pr-seq
+              ; for their custom types.
+              (satisfies? IPrintable obj) (apply printer (-pr-seq obj opts))
+
+              (regexp? obj) (printer "#\"" (.-source obj) "\"")
+
+              :else (printer "#<" (str obj) ">")))))
+
+(defn pr-seq-with [objs printer opts]
+  (pr-with (first objs) printer opts)
+  (doseq [obj (next objs)]
+    (printer " ")
+    (pr-with obj printer opts)))
+
+(defn- pr-sb-with-opts [objs opts]
+  (let [sb (gstring/StringBuffer.)
+        printer (fn [& xs]
+                  (doseq [x xs]
+                    (.append sb x)))]
+    (pr-seq-with objs printer opts)
     sb))
 
 (defn pr-str-with-opts
@@ -6173,30 +6239,22 @@ reduces them without incurring seq initialization"
   [objs opts]
   (if (empty? objs)
     ""
-    (str (pr-sb objs opts))))
+    (str (pr-sb-with-opts objs opts))))
 
 (defn prn-str-with-opts
   "Same as pr-str-with-opts followed by (newline)"
   [objs opts]
   (if (empty? objs)
     "\n"
-    (let [sb (pr-sb objs opts)]
+    (let [sb (pr-sb-with-opts objs opts)]
       (.append sb \newline)
       (str sb))))
 
-(defn pr-with-opts
+(defn- pr-with-opts
   "Prints a sequence of objects using string-print, observing all
   the options given in opts"
   [objs opts]
-  (if (empty? objs)
-    (string-print "")
-    (do
-     (doseq [string (pr-seq (first objs) opts)]
-       (string-print string))
-     (doseq [obj (next objs)]
-       (string-print " ")
-       (doseq [string (pr-seq obj opts)]
-         (string-print string))))))
+  (string-print (pr-str-with-opts objs opts)))
 
 (defn newline [opts]
   (string-print "\n")
@@ -6314,7 +6372,7 @@ reduces them without incurring seq initialization"
             (normalize (.getUTCSeconds d) 2)      "."
             (normalize (.getUTCMilliseconds d) 3) "-"
             "00:00\""))))
-  
+
   LazySeq
   (-pr-seq [coll opts] (pr-sequential pr-seq "(" " " ")" opts coll))
 
@@ -6400,6 +6458,142 @@ reduces them without incurring seq initialization"
   Range
   (-pr-seq [coll opts] (pr-sequential pr-seq "(" " " ")" opts coll)))
 
+(extend-protocol IPrintWith
+  boolean
+  (-pr-with [bool printer opts] (printer (str bool)))
+
+  number
+  (-pr-with [n printer opts] (/ 1 0) (printer (str n)))
+
+  array
+  (-pr-with [a printer opts]
+    (pr-sequential-with printer pr-with "#<Array [" ", " "]>" opts a))
+
+  string
+  (-pr-with [obj printer opts]
+    (cond
+     (keyword? obj)
+       (do
+         (printer ":")
+         (when-let [nspc (namespace obj)]
+           (printer (str nspc) "/"))
+         (printer (name obj)))
+     (symbol? obj)
+       (do
+         (when-let [nspc (namespace obj)]
+           (printer (str nspc) "/"))
+         (printer (name obj)))
+     :else (if (:readably opts)
+             (printer (goog.string.quote obj))
+             (printer obj))))
+
+  function
+  (-pr-with [this printer _]
+    (printer "#<" (str this) ">"))
+
+  js/Date
+  (-pr-with [d printer _]
+    (let [normalize (fn [n len]
+                      (loop [ns (str n)]
+                        (if (< (count ns) len)
+                          (recur (str "0" ns))
+                          ns)))]
+      (printer
+        "#inst \""
+        (str (.getUTCFullYear d))             "-"
+        (normalize (inc (.getUTCMonth d)) 2)  "-"
+        (normalize (.getUTCDate d) 2)         "T"
+        (normalize (.getUTCHours d) 2)        ":"
+        (normalize (.getUTCMinutes d) 2)      ":"
+        (normalize (.getUTCSeconds d) 2)      "."
+        (normalize (.getUTCMilliseconds d) 3) "-"
+        "00:00\"")))
+
+  LazySeq
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+
+  IndexedSeq
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+
+  RSeq
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+
+  PersistentQueue
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "#queue [" " " "]" opts (seq coll)))
+
+  PersistentTreeMapSeq
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+
+  NodeSeq
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+
+  ArrayNodeSeq
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+
+  List
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+
+  Cons
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+
+  EmptyList
+  (-pr-with [coll printer opts] (printer "()"))
+
+  Vector
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "[" " " "]" opts coll))
+
+  PersistentVector
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "[" " " "]" opts coll))
+
+  ChunkedCons
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+
+  ChunkedSeq
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+
+  Subvec
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "[" " " "]" opts coll))
+
+  BlackNode
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "[" " " "]" opts coll))
+
+  RedNode
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "[" " " "]" opts coll))
+
+  ObjMap
+  (-pr-with [coll printer opts]
+    (let [pr-pair (fn [keyval] (pr-sequential-with printer pr-with "" " " "" opts keyval))]
+      (pr-sequential-with printer pr-pair "{" ", " "}" opts coll)))
+
+  HashMap
+  (-pr-with [coll printer opts]
+    (let [pr-pair (fn [keyval] (pr-sequential-with printer pr-with "" " " "" opts keyval))]
+      (pr-sequential-with printer pr-pair "{" ", " "}" opts coll)))
+
+  PersistentArrayMap
+  (-pr-with [coll printer opts]
+    (let [pr-pair (fn [keyval] (pr-sequential-with printer pr-with "" " " "" opts keyval))]
+      (pr-sequential-with printer pr-pair "{" ", " "}" opts coll)))
+
+  PersistentHashMap
+  (-pr-with [coll printer opts]
+    (let [pr-pair (fn [keyval] (pr-sequential-with printer pr-with "" " " "" opts keyval))]
+      (pr-sequential-with printer pr-pair "{" ", " "}" opts coll)))
+
+  PersistentTreeMap
+  (-pr-with [coll printer opts]
+    (let [pr-pair (fn [keyval] (pr-sequential-with printer pr-with "" " " "" opts keyval))]
+      (pr-sequential-with printer pr-pair "{" ", " "}" opts coll)))
+
+  PersistentHashSet
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "#{" " " "}" opts coll))
+
+  PersistentTreeSet
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "#{" " " "}" opts coll))
+
+  Range
+  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll)))
+
 
 ;; IComparable
 (extend-protocol IComparable
@@ -6421,6 +6615,12 @@ reduces them without incurring seq initialization"
   IPrintable
   (-pr-seq [a opts]
     (concat  ["#<Atom: "] (-pr-seq state opts) ">"))
+
+  IPrintWith
+  (-pr-with [a printer opts]
+    (printer "#<Atom: ")
+    (-pr-with state printer opts)
+    (printer ">"))
 
   IWatchable
   (-notify-watches [this oldval newval]
@@ -6952,7 +7152,7 @@ reduces them without incurring seq initialization"
   Object
   (toString [this]
     (pr-str this))
-    
+
   IEquiv
   (-equiv [_ other]
     (and (instance? UUID other) (identical? uuid (.-uuid other))))
@@ -6960,6 +7160,10 @@ reduces them without incurring seq initialization"
   IPrintable
   (-pr-seq [_ _]
     (list (str "#uuid \"" uuid "\"")))
+
+  IPrintWith
+  (-pr-with [_ printer _]
+    (printer (str "#uuid \"" uuid "\"")))
 
   IHash
   (-hash [this]

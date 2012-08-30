@@ -154,8 +154,8 @@
                '[IFn ICounted IEmptyableCollection ICollection IIndexed ASeq ISeq INext
                  ILookup IAssociative IMap IMapEntry ISet IStack IVector IDeref
                  IDerefWithTimeout IMeta IWithMeta IReduce IKVReduce IEquiv IHash
-                 ISeqable ISequential IList IRecord IReversible ISorted IPrintable
-                 IPrintWith IPending IWatchable IEditableCollection ITransientCollection
+                 ISeqable ISequential IList IRecord IReversible ISorted IPrintable IWriter
+                 IPrintWriter IPending IWatchable IEditableCollection ITransientCollection
                  ITransientAssociative ITransientMap ITransientVector ITransientSet
                  IMultiFn])
           (iterate (fn [[p b]]
@@ -574,14 +574,14 @@
          (deftype* ~t ~fields ~pmasks)
          (set! (.-cljs$lang$type ~t) true)
          (set! (.-cljs$lang$ctorPrSeq ~t) (fn [this#] (list ~(core/str r))))
-         (set! (.-cljs$lang$ctorPrWith ~t) (fn [this# printer#] (printer# ~(core/str r))))
+         (set! (.-cljs$lang$ctorPrWriter ~t) (fn [this# writer#] (-write writer# ~(core/str r))))
          (extend-type ~t ~@(dt->et impls fields true))
          ~t)
       `(do
          (deftype* ~t ~fields ~pmasks)
          (set! (.-cljs$lang$type ~t) true)
          (set! (.-cljs$lang$ctorPrSeq ~t) (fn [this#] (list ~(core/str r))))
-         (set! (.-cljs$lang$ctorPrWith ~t) (fn [this# printer#] (printer# ~(core/str r))))
+         (set! (.-cljs$lang$ctorPrWriter ~t) (fn [this# writer#] (-write writer# ~(core/str r))))
          ~t))))
 
 (defn- emit-defrecord
@@ -650,13 +650,13 @@
                                  (concat [~@(map #(list `vector (keyword %) %) base-fields)]
                                          ~'__extmap))))
 
-                  'IPrintWith
-                  `(~'-pr-with [this# printer# opts#]
-                               (let [pr-pair# (fn [keyval#] (pr-sequential-with printer# pr-with "" " " "" opts# keyval#))]
-                                 (pr-sequential-with
-                                  printer# pr-pair# (core/str "#" ~(name rname) "{") ", " "}" opts#
-                                  (concat [~@(map #(list `vector (keyword %) %) base-fields)]
-                                          ~'__extmap))))
+                  'IPrintWriter
+                  `(~'-pr-writer [this# writer# opts#]
+                                 (let [pr-pair# (fn [keyval#] (pr-sequential-writer writer# pr-writer "" " " "" opts# keyval#))]
+                                   (pr-sequential-writer
+                                    writer# pr-pair# (core/str "#" ~(name rname) "{") ", " "}" opts#
+                                    (concat [~@(map #(list `vector (keyword %) %) base-fields)]
+                                            ~'__extmap))))
                   ])
           [fpps pmasks] (prepare-protocol-masks env tagname impls)
           protocols (collect-protocols impls env)
@@ -690,7 +690,7 @@
        ~(emit-defrecord &env rsym r fields impls)
        (set! (.-cljs$lang$type ~r) true)
        (set! (.-cljs$lang$ctorPrSeq ~r) (fn [this#] (list ~(core/str r))))
-       (set! (.-cljs$lang$ctorPrWith ~r) (fn [this# printer#] (printer# ~(core/str r))))
+       (set! (.-cljs$lang$ctorPrWriter ~r) (fn [this# writer#] (-write writer# ~(core/str r))))
        ~(build-positional-factory rsym r fields)
        ~(build-map-factory rsym r fields)
        ~r)))

@@ -237,17 +237,21 @@
 
 (defprotocol ^:deprecated IPrintable
   "Do not use this.  It is kept for backwards compatibility with existing
-   user code that depends on it, but it has been superceded by IPrintWith.
-   User code that depends on this should be changed to use -pr-with instead."
+   user code that depends on it, but it has been superceded by IPrintWriter
+   User code that depends on this should be changed to use -pr-writer instead."
   (-pr-seq [o opts]))
 
-(defprotocol IPrintWith
+(defprotocol IWriter
+  (-write [writer s])
+  (-flush [writer]))
+
+(defprotocol IPrintWriter
   "The old IPrintable protocol's implementation consisted of building a giant
    list of strings to concatenate.  This involved lots of concat calls,
    intermediate vectors, and lazy-seqs, and was very slow in some older JS
-   engines.  IPrintWith makes the print implementation configurable, so it can
+   engines.  IPrintWriter implements printing via the IWriter protocol, so it
    be implemented efficiently in terms of e.g. a StringBuffer append."
-  (-pr-with [o printer opts]))
+  (-pr-writer [o writer opts]))
 
 (defprotocol IPending
   (-realized? [d]))
@@ -343,8 +347,8 @@
   IPrintable
   (-pr-seq [o] (list "nil"))
 
-  IPrintWith
-  (-pr-with [o printer _] (printer "nil"))
+  IPrintWriter
+  (-pr-writer [o writer _] (-write writer "nil"))
 
   IIndexed
   (-nth
@@ -2901,7 +2905,7 @@ reduces them without incurring seq initialization"
              ret))))
 
 (declare tv-editable-root tv-editable-tail TransientVector deref
-         pr-sequential pr-sequential-with pr-with)
+         pr-sequential pr-sequential-writer pr-writer)
 
 (declare chunked-seq)
 
@@ -6146,14 +6150,18 @@ reduces them without incurring seq initialization"
             (interpose [sep] (map #(print-one % opts) coll)))
           [end]))
 
-(defn pr-sequential-with [printer print-one begin sep end opts coll]
-  (printer begin)
+(defn pr-sequential-writer [writer print-one begin sep end opts coll]
+  (-write writer begin)
   (when (seq coll)
-    (print-one (first coll) printer opts))
+    (print-one (first coll) writer opts))
   (doseq [o (next coll)]
-    (printer sep)
-    (print-one o printer opts))
-  (printer end))
+    (-write writer sep)
+    (print-one o writer opts))
+  (-write writer end))
+
+(defn write-all [writer & ss]
+  (doseq [s ss]
+    (-write writer s)))
 
 (defn string-print [x]
   (*print-fn* x)
@@ -6161,6 +6169,16 @@ reduces them without incurring seq initialization"
 
 (defn flush [] ;stub
   nil)
+
+(deftype StringBufferWriter [sb]
+  IWriter
+  (-write [_ s] (.append sb s))
+  (-flush [_] nil))
+
+(deftype StandardOutputWriter []
+  IWriter
+  (-write [_ s] (string-print s))
+  (-flush [_] (flush)))
 
 (defn- ^:deprecated pr-seq
   "Do not use this.  It is kept for backwards compatibility with the
@@ -6186,51 +6204,50 @@ reduces them without incurring seq initialization"
 
              :else (list "#<" (str obj) ">")))))
 
-(defn- pr-with
+(defn- pr-writer
   "Prefer this to pr-seq, because it makes the printing function
    configurable, allowing efficient implementations such as appending
    to a StringBuffer."
-  [obj printer opts]
+  [obj writer opts]
   (cond
-    (nil? obj) (printer "nil")
-    (undefined? obj) (printer "#<undefined>")
+    (nil? obj) (-write writer "nil")
+    (undefined? obj) (-write writer "#<undefined>")
     :else (do
             (when (and (get opts :meta)
                        (satisfies? IMeta obj)
                        (meta obj))
-              (printer "^")
-              (pr-with (meta obj) printer opts)
-              (printer " "))
+              (-write writer "^")
+              (pr-writer (meta obj) writer opts)
+              (-write writer " "))
             (cond
               ;; handle CLJS ctors
               (and (not (nil? obj))
                    ^boolean (.-cljs$lang$type obj))
-                (.cljs$lang$ctorPrWith obj printer opts)
+                (.cljs$lang$ctorPrWriter obj writer opts)
 
-              ; Use the new, more efficient, IPrintWith interface when possible.
-              (satisfies? IPrintWith obj) (-pr-with obj printer opts)
+              ; Use the new, more efficient, IPrintWriter interface when possible.
+              (satisfies? IPrintWriter obj) (-pr-writer obj writer opts)
 
               ; Fall back on the deprecated IPrintable if necessary.  Note that this
               ; will only happen when ClojureScript users have implemented -pr-seq
               ; for their custom types.
-              (satisfies? IPrintable obj) (apply printer (-pr-seq obj opts))
+              (satisfies? IPrintable obj) (apply write-all writer (-pr-seq obj opts))
 
-              (regexp? obj) (printer "#\"" (.-source obj) "\"")
+              (regexp? obj) (write-all writer "#\"" (.-source obj) "\"")
 
-              :else (printer "#<" (str obj) ">")))))
+              :else (write-all writer "#<" (str obj) ">")))))
 
-(defn pr-seq-with [objs printer opts]
-  (pr-with (first objs) printer opts)
+(defn pr-seq-writer [objs writer opts]
+  (pr-writer (first objs) writer opts)
   (doseq [obj (next objs)]
-    (printer " ")
-    (pr-with obj printer opts)))
+    (-write writer " ")
+    (pr-writer obj writer opts)))
 
 (defn- pr-sb-with-opts [objs opts]
   (let [sb (gstring/StringBuffer.)
-        printer (fn [& xs]
-                  (doseq [x xs]
-                    (.append sb x)))]
-    (pr-seq-with objs printer opts)
+        writer (StringBufferWriter. sb)]
+    (pr-seq-writer objs writer opts)
+    (-flush writer)
     sb))
 
 (defn pr-str-with-opts
@@ -6254,7 +6271,9 @@ reduces them without incurring seq initialization"
   "Prints a sequence of objects using string-print, observing all
   the options given in opts"
   [objs opts]
-  (string-print (pr-str-with-opts objs opts)))
+  (let [writer (StandardOutputWriter.)]
+    (pr-seq-writer objs writer opts)
+    (-flush writer)))
 
 (defn newline [opts]
   (string-print "\n")
@@ -6458,47 +6477,47 @@ reduces them without incurring seq initialization"
   Range
   (-pr-seq [coll opts] (pr-sequential pr-seq "(" " " ")" opts coll)))
 
-(extend-protocol IPrintWith
+(extend-protocol IPrintWriter
   boolean
-  (-pr-with [bool printer opts] (printer (str bool)))
+  (-pr-writer [bool writer opts] (-write writer (str bool)))
 
   number
-  (-pr-with [n printer opts] (/ 1 0) (printer (str n)))
+  (-pr-writer [n writer opts] (/ 1 0) (-write writer (str n)))
 
   array
-  (-pr-with [a printer opts]
-    (pr-sequential-with printer pr-with "#<Array [" ", " "]>" opts a))
+  (-pr-writer [a writer opts]
+    (pr-sequential-writer writer pr-writer "#<Array [" ", " "]>" opts a))
 
   string
-  (-pr-with [obj printer opts]
+  (-pr-writer [obj writer opts]
     (cond
      (keyword? obj)
        (do
-         (printer ":")
+         (-write writer ":")
          (when-let [nspc (namespace obj)]
-           (printer (str nspc) "/"))
-         (printer (name obj)))
+           (write-all writer (str nspc) "/"))
+         (-write writer (name obj)))
      (symbol? obj)
        (do
          (when-let [nspc (namespace obj)]
-           (printer (str nspc) "/"))
-         (printer (name obj)))
+           (write-all writer (str nspc) "/"))
+         (-write writer (name obj)))
      :else (if (:readably opts)
-             (printer (goog.string.quote obj))
-             (printer obj))))
+             (-write writer (goog.string.quote obj))
+             (-write writer obj))))
 
   function
-  (-pr-with [this printer _]
-    (printer "#<" (str this) ">"))
+  (-pr-writer [this writer _]
+    (write-all writer "#<" (str this) ">"))
 
   js/Date
-  (-pr-with [d printer _]
+  (-pr-writer [d writer _]
     (let [normalize (fn [n len]
                       (loop [ns (str n)]
                         (if (< (count ns) len)
                           (recur (str "0" ns))
                           ns)))]
-      (printer
+      (write-all writer
         "#inst \""
         (str (.getUTCFullYear d))             "-"
         (normalize (inc (.getUTCMonth d)) 2)  "-"
@@ -6510,89 +6529,89 @@ reduces them without incurring seq initialization"
         "00:00\"")))
 
   LazySeq
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
 
   IndexedSeq
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
 
   RSeq
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
 
   PersistentQueue
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "#queue [" " " "]" opts (seq coll)))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "#queue [" " " "]" opts (seq coll)))
 
   PersistentTreeMapSeq
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
 
   NodeSeq
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
 
   ArrayNodeSeq
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
 
   List
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
 
   Cons
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
 
   EmptyList
-  (-pr-with [coll printer opts] (printer "()"))
+  (-pr-writer [coll writer opts] (-write writer "()"))
 
   Vector
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "[" " " "]" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "[" " " "]" opts coll))
 
   PersistentVector
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "[" " " "]" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "[" " " "]" opts coll))
 
   ChunkedCons
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
 
   ChunkedSeq
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
 
   Subvec
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "[" " " "]" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "[" " " "]" opts coll))
 
   BlackNode
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "[" " " "]" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "[" " " "]" opts coll))
 
   RedNode
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "[" " " "]" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "[" " " "]" opts coll))
 
   ObjMap
-  (-pr-with [coll printer opts]
-    (let [pr-pair (fn [keyval] (pr-sequential-with printer pr-with "" " " "" opts keyval))]
-      (pr-sequential-with printer pr-pair "{" ", " "}" opts coll)))
+  (-pr-writer [coll writer opts]
+    (let [pr-pair (fn [keyval] (pr-sequential-writer writer pr-writer "" " " "" opts keyval))]
+      (pr-sequential-writer writer pr-pair "{" ", " "}" opts coll)))
 
   HashMap
-  (-pr-with [coll printer opts]
-    (let [pr-pair (fn [keyval] (pr-sequential-with printer pr-with "" " " "" opts keyval))]
-      (pr-sequential-with printer pr-pair "{" ", " "}" opts coll)))
+  (-pr-writer [coll writer opts]
+    (let [pr-pair (fn [keyval] (pr-sequential-writer writer pr-writer "" " " "" opts keyval))]
+      (pr-sequential-writer writer pr-pair "{" ", " "}" opts coll)))
 
   PersistentArrayMap
-  (-pr-with [coll printer opts]
-    (let [pr-pair (fn [keyval] (pr-sequential-with printer pr-with "" " " "" opts keyval))]
-      (pr-sequential-with printer pr-pair "{" ", " "}" opts coll)))
+  (-pr-writer [coll writer opts]
+    (let [pr-pair (fn [keyval] (pr-sequential-writer writer pr-writer "" " " "" opts keyval))]
+      (pr-sequential-writer writer pr-pair "{" ", " "}" opts coll)))
 
   PersistentHashMap
-  (-pr-with [coll printer opts]
-    (let [pr-pair (fn [keyval] (pr-sequential-with printer pr-with "" " " "" opts keyval))]
-      (pr-sequential-with printer pr-pair "{" ", " "}" opts coll)))
+  (-pr-writer [coll writer opts]
+    (let [pr-pair (fn [keyval] (pr-sequential-writer writer pr-writer "" " " "" opts keyval))]
+      (pr-sequential-writer writer pr-pair "{" ", " "}" opts coll)))
 
   PersistentTreeMap
-  (-pr-with [coll printer opts]
-    (let [pr-pair (fn [keyval] (pr-sequential-with printer pr-with "" " " "" opts keyval))]
-      (pr-sequential-with printer pr-pair "{" ", " "}" opts coll)))
+  (-pr-writer [coll writer opts]
+    (let [pr-pair (fn [keyval] (pr-sequential-writer writer pr-writer "" " " "" opts keyval))]
+      (pr-sequential-writer writer pr-pair "{" ", " "}" opts coll)))
 
   PersistentHashSet
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "#{" " " "}" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "#{" " " "}" opts coll))
 
   PersistentTreeSet
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "#{" " " "}" opts coll))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "#{" " " "}" opts coll))
 
   Range
-  (-pr-with [coll printer opts] (pr-sequential-with printer pr-with "(" " " ")" opts coll)))
+  (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll)))
 
 
 ;; IComparable
@@ -6616,11 +6635,11 @@ reduces them without incurring seq initialization"
   (-pr-seq [a opts]
     (concat  ["#<Atom: "] (-pr-seq state opts) ">"))
 
-  IPrintWith
-  (-pr-with [a printer opts]
-    (printer "#<Atom: ")
-    (-pr-with state printer opts)
-    (printer ">"))
+  IPrintWriter
+  (-pr-writer [a writer opts]
+    (-write writer "#<Atom: ")
+    (-pr-writer state writer opts)
+    (-write writer ">"))
 
   IWatchable
   (-notify-watches [this oldval newval]
@@ -7161,9 +7180,9 @@ reduces them without incurring seq initialization"
   (-pr-seq [_ _]
     (list (str "#uuid \"" uuid "\"")))
 
-  IPrintWith
-  (-pr-with [_ printer _]
-    (printer (str "#uuid \"" uuid "\"")))
+  IPrintWriter
+  (-pr-writer [_ writer _]
+    (-write writer (str "#uuid \"" uuid "\"")))
 
   IHash
   (-hash [this]

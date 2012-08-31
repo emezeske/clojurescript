@@ -155,7 +155,7 @@
                  ILookup IAssociative IMap IMapEntry ISet IStack IVector IDeref
                  IDerefWithTimeout IMeta IWithMeta IReduce IKVReduce IEquiv IHash
                  ISeqable ISequential IList IRecord IReversible ISorted IPrintable IWriter
-                 IPrintWriter IPending IWatchable IEditableCollection ITransientCollection
+                 IPrintWithWriter IPending IWatchable IEditableCollection ITransientCollection
                  ITransientAssociative ITransientMap ITransientVector ITransientSet
                  IMultiFn])
           (iterate (fn [[p b]]
@@ -650,7 +650,7 @@
                                  (concat [~@(map #(list `vector (keyword %) %) base-fields)]
                                          ~'__extmap))))
 
-                  'IPrintWriter
+                  'IPrintWithWriter
                   `(~'-pr-writer [this# writer# opts#]
                                  (let [pr-pair# (fn [keyval#] (pr-sequential-writer writer# pr-writer "" " " "" opts# keyval#))]
                                    (pr-sequential-writer

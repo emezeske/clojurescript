@@ -237,7 +237,7 @@
 
 (defprotocol ^:deprecated IPrintable
   "Do not use this.  It is kept for backwards compatibility with existing
-   user code that depends on it, but it has been superceded by IPrintWriter
+   user code that depends on it, but it has been superceded by IPrintWithWriter
    User code that depends on this should be changed to use -pr-writer instead."
   (-pr-seq [o opts]))
 
@@ -245,11 +245,11 @@
   (-write [writer s])
   (-flush [writer]))
 
-(defprotocol IPrintWriter
+(defprotocol IPrintWithWriter
   "The old IPrintable protocol's implementation consisted of building a giant
    list of strings to concatenate.  This involved lots of concat calls,
    intermediate vectors, and lazy-seqs, and was very slow in some older JS
-   engines.  IPrintWriter implements printing via the IWriter protocol, so it
+   engines.  IPrintWithWriter implements printing via the IWriter protocol, so it
    be implemented efficiently in terms of e.g. a StringBuffer append."
   (-pr-writer [o writer opts]))
 
@@ -347,7 +347,7 @@
   IPrintable
   (-pr-seq [o] (list "nil"))
 
-  IPrintWriter
+  IPrintWithWriter
   (-pr-writer [o writer _] (-write writer "nil"))
 
   IIndexed
@@ -6225,8 +6225,8 @@ reduces them without incurring seq initialization"
                    ^boolean (.-cljs$lang$type obj))
                 (.cljs$lang$ctorPrWriter obj writer opts)
 
-              ; Use the new, more efficient, IPrintWriter interface when possible.
-              (satisfies? IPrintWriter obj) (-pr-writer obj writer opts)
+              ; Use the new, more efficient, IPrintWithWriter interface when possible.
+              (satisfies? IPrintWithWriter obj) (-pr-writer obj writer opts)
 
               ; Fall back on the deprecated IPrintable if necessary.  Note that this
               ; will only happen when ClojureScript users have implemented -pr-seq
@@ -6477,7 +6477,7 @@ reduces them without incurring seq initialization"
   Range
   (-pr-seq [coll opts] (pr-sequential pr-seq "(" " " ")" opts coll)))
 
-(extend-protocol IPrintWriter
+(extend-protocol IPrintWithWriter
   boolean
   (-pr-writer [bool writer opts] (-write writer (str bool)))
 
@@ -6635,7 +6635,7 @@ reduces them without incurring seq initialization"
   (-pr-seq [a opts]
     (concat  ["#<Atom: "] (-pr-seq state opts) ">"))
 
-  IPrintWriter
+  IPrintWithWriter
   (-pr-writer [a writer opts]
     (-write writer "#<Atom: ")
     (-pr-writer state writer opts)
@@ -7180,7 +7180,7 @@ reduces them without incurring seq initialization"
   (-pr-seq [_ _]
     (list (str "#uuid \"" uuid "\"")))
 
-  IPrintWriter
+  IPrintWithWriter
   (-pr-writer [_ writer _]
     (-write writer (str "#uuid \"" uuid "\"")))
 

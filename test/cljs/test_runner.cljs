@@ -8,7 +8,7 @@
             [cljs.letfn-test :as letfn-test]
             [foo.ns-shadow-test :as ns-shadow-test]))
 
-(set! *print-fn* js/write)
+(set! *print-fn* js/print)
 
 (core-test/test-stuff)
 (reader-test/test-reader)

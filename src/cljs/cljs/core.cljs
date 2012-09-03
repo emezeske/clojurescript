@@ -6175,11 +6175,6 @@ reduces them without incurring seq initialization"
   (-write [_ s] (.append sb s))
   (-flush [_] nil))
 
-(deftype StandardOutputWriter []
-  IWriter
-  (-write [_ s] (string-print s))
-  (-flush [_] (flush)))
-
 (defn- ^:deprecated pr-seq
   "Do not use this.  It is kept for backwards compatibility with the
    old IPrintable protocol."
@@ -6271,9 +6266,7 @@ reduces them without incurring seq initialization"
   "Prints a sequence of objects using string-print, observing all
   the options given in opts"
   [objs opts]
-  (let [writer (StandardOutputWriter.)]
-    (pr-seq-writer objs writer opts)
-    (-flush writer)))
+  (string-print (prn-str-with-opts objs opts)))
 
 (defn newline [opts]
   (string-print "\n")
